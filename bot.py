@@ -18,7 +18,7 @@ TOKEN = "8162365118:AAHdvqm3ewNTee8Q5izkS4s1XBh8vTO7oRk"
 logging.basicConfig(level=logging.INFO)
 
 # =========================
-# БАЙКИ
+# ТАБЛИЦА ЦЕН
 # =========================
 
 BIKES = {
@@ -50,13 +50,13 @@ QUESTIONS = [
     "Вам больше 18 лет?",
     "Есть ли у вас опыт вождения?",
     "Есть ли у вас водительское удостоверение?",
-    "Понимаете ли вы правила дорожного движения?",
+    "Понимаете ли вы ПДД?",
     "Будете ли вы ездить аккуратно?",
-    "Не планируете ли вы передавать байк третьим лицам?",
-    "Согласны ли вы внести депозит?",
-    "Есть ли у вас WhatsApp?",
-    "Понимаете ли вы ответственность за повреждения?",
-    "Подтверждаете ли вы достоверность данных?"
+    "Не будете передавать байк третьим лицам?",
+    "Согласны внести депозит?",
+    "Есть WhatsApp?",
+    "Понимаете ответственность за повреждения?",
+    "Подтверждаете достоверность данных?"
 ]
 
 # =========================
@@ -65,29 +65,12 @@ QUESTIONS = [
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("Honda PCX2 > 340k", callback_data="bike_pcx2")],
-        [InlineKeyboardButton("Honda Lead 125 > 280k", callback_data="bike_lead")],
+        [InlineKeyboardButton("Honda PCX2", callback_data="bike_pcx2")],
+        [InlineKeyboardButton("Honda Lead 125", callback_data="bike_lead")],
     ]
 
     await update.message.reply_text(
-        "Пожалуйста, выберите ваш скутер:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-# =========================
-# ВЫБОР СРОКА
-# =========================
-
-async def choose_duration(query):
-    keyboard = [
-        [InlineKeyboardButton("2 < первая цена", callback_data="cat_2")],
-        [InlineKeyboardButton("6 < вторая цена", callback_data="cat_6")],
-        [InlineKeyboardButton("13 < третья цена", callback_data="cat_13")],
-        [InlineKeyboardButton("14 + четвертая цена", callback_data="cat_14")],
-    ]
-
-    await query.edit_message_text(
-        "Выберите срок аренды:",
+        "Выберите скутер:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -98,49 +81,48 @@ async def choose_duration(query):
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
 
-    # выбор байка
-    if data.startswith("bike_"):
-        bike_key = data.split("_")[1]
-        context.user_data["bike"] = bike_key
-        await choose_duration(query)
+    bike_key = query.data.split("_")[1]
+    context.user_data["bike"] = bike_key
+    context.user_data["await_days"] = True
 
-    # выбор категории
-    elif data.startswith("cat_"):
-        category = data.split("_")[1]
-        context.user_data["category"] = category
-        context.user_data["await_days"] = True
-
-        await query.edit_message_text(
-            "Введите точное количество дней аренды:"
-        )
-
-    # ответы теста
-    elif data.startswith("q_"):
-        answer = data.split("_")[1]
-
-        if answer == "yes":
-            context.user_data["score"] += 1
-
-        context.user_data["q_index"] += 1
-        await ask_question(query, context)
+    await query.edit_message_text(
+        "Введите количество дней аренды (максимум 20):"
+    )
 
 # =========================
-# ВВОД ДНЕЙ
+# ОБРАБОТКА ДНЕЙ
 # =========================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if context.user_data.get("await_days"):
+
         try:
             days = int(update.message.text)
         except:
             await update.message.reply_text("Введите число.")
             return
 
+        if days > 20:
+            await update.message.reply_text(
+                "❌ Аренда более 20 дней недоступна."
+            )
+            return
+
         bike_key = context.user_data["bike"]
-        category = context.user_data["category"]
-        price_per_day = BIKES[bike_key]["prices"][category]
+        bike = BIKES[bike_key]
+
+        # Определяем тариф автоматически
+        if days <= 2:
+            price_per_day = bike["prices"]["2"]
+        elif days <= 6:
+            price_per_day = bike["prices"]["6"]
+        elif days <= 13:
+            price_per_day = bike["prices"]["13"]
+        else:
+            price_per_day = bike["prices"]["14"]
+
         total = price_per_day * days
 
         context.user_data["await_days"] = False
@@ -149,7 +131,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"Вы выбрали:\n"
-            f"{BIKES[bike_key]['name']}\n"
+            f"{bike['name']}\n"
             f"Дней: {days}\n"
             f"Цена за день: {price_per_day}k\n"
             f"Итого: {total}k\n\n"
@@ -159,13 +141,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_question(update.message, context)
 
 # =========================
-# ВОПРОСЫ + СКОРИНГ
+# ВОПРОСЫ
 # =========================
 
-async def ask_question(message_or_query, context):
+async def ask_question(message, context):
+
     index = context.user_data["q_index"]
 
     if index >= len(QUESTIONS):
+
         score = context.user_data["score"]
 
         if score >= 8:
@@ -175,30 +159,37 @@ async def ask_question(message_or_query, context):
         else:
             result = "❌ Бронирование недоступно."
 
-        await message_or_query.reply_text(
+        await message.reply_text(
             f"Тест завершен.\n"
-            f"Ваш результат: {score}/10\n\n"
-            f"{result}"
+            f"Результат: {score}/10\n\n{result}"
         )
         return
 
-    keyboard = [
-        [
-            InlineKeyboardButton("Да", callback_data="q_yes"),
-            InlineKeyboardButton("Нет", callback_data="q_no"),
-        ]
-    ]
+    keyboard = [[
+        InlineKeyboardButton("Да", callback_data="q_yes"),
+        InlineKeyboardButton("Нет", callback_data="q_no"),
+    ]]
 
-    if hasattr(message_or_query, "edit_message_text"):
-        await message_or_query.edit_message_text(
-            QUESTIONS[index],
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await message_or_query.reply_text(
-            QUESTIONS[index],
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    await message.reply_text(
+        QUESTIONS[index],
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# =========================
+# ОТВЕТЫ НА ТЕСТ
+# =========================
+
+async def test_answers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "q_yes":
+        context.user_data["score"] += 1
+
+    context.user_data["q_index"] += 1
+
+    await ask_question(query.message, context)
 
 # =========================
 # MAIN
@@ -208,7 +199,8 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CallbackQueryHandler(button, pattern="^bike_"))
+    app.add_handler(CallbackQueryHandler(test_answers, pattern="^q_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Bot started...")
