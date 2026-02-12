@@ -14,7 +14,7 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-TOKEN = "8162365118:AAHdvqm3ewNTee8Q5izkS4s1XBh8vTO7oRk"
+TOKEN = "8162365118:AAGmm-PMJXuo1G3VGHXeT5nk0xPNcpKjcVU"
 
 # 🔥 ВСТАВЬ ID ГРУППЫ
 GROUP_ID = -1003726782924
