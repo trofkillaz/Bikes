@@ -26,7 +26,19 @@ REDIS_URL = os.getenv("REDIS_URL")
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-(SCOOTER, DAYS, NAME, HOTEL, ROOM, CONTACT, CONFIRM) = range(7)
+(
+    RISK,
+    SCOOTER,
+    DAYS,
+    NAME,
+    HOTEL,
+    ROOM,
+    CONTACT,
+    CONFIRM
+) = range(8)
+
+
+# ---------- СКУТЕРЫ ----------
 
 SCOOTERS = {
     "pcx2": {"name": "Honda PCX2", "price": 300000},
@@ -34,19 +46,109 @@ SCOOTERS = {
 }
 
 
+# ---------- РИСК ВОПРОСЫ ----------
+
+RISK_QUESTIONS = [
+    ("Права категории A?", 2, -1),
+    ("Международные права?", 1, 0),
+    ("Стаж более 2 лет?", 2, 0),
+    ("Были ДТП за последние 2 года?", -2, 2),
+    ("Срок аренды более 15 дней?", -1, 1),
+    ("Совместное пользование?", 0, 1),
+    ("Выезд за пределы провинции?", 0, 1),
+    ("В стране более 7 дней?", 1, 0),
+    ("Возраст старше 23 лет?", 1, 0),
+    ("Ранее арендовал во Вьетнаме?", 2, 1),
+]
+
+
 # ---------- START ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Honda PCX2", callback_data="pcx2")],
-        [InlineKeyboardButton("Honda Lead", callback_data="lead")],
-    ]
+    context.user_data["risk_score"] = 0
+    context.user_data["risk_step"] = 0
+    await ask_risk_question(update, context)
+    return RISK
 
-    await update.message.reply_text(
-        "🛵 Выберите скутер:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return SCOOTER
+
+# ---------- ASK QUESTION ----------
+
+async def ask_risk_question(update, context):
+    step = context.user_data["risk_step"]
+    question = RISK_QUESTIONS[step][0]
+
+    keyboard = [[
+        InlineKeyboardButton("✅ Да", callback_data="risk_yes"),
+        InlineKeyboardButton("❌ Нет", callback_data="risk_no"),
+    ]]
+
+    if update.message:
+        await update.message.reply_text(
+            f"📊 Оценка риска\n\n{question}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.callback_query.edit_message_text(
+            f"📊 Оценка риска\n\n{question}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+# ---------- HANDLE RISK ----------
+
+async def handle_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    step = context.user_data["risk_step"]
+    yes_score = RISK_QUESTIONS[step][1]
+    no_score = RISK_QUESTIONS[step][2]
+
+    if query.data == "risk_yes":
+        context.user_data["risk_score"] += yes_score
+    else:
+        context.user_data["risk_score"] += no_score
+
+    context.user_data["risk_step"] += 1
+
+    # Если вопросы закончились
+    if context.user_data["risk_step"] >= len(RISK_QUESTIONS):
+
+        score = context.user_data["risk_score"]
+
+        if score >= 8:
+            risk_level = "🟢 Низкий риск"
+        elif score >= 3:
+            risk_level = "🟡 Средний риск"
+        else:
+            risk_level = "🔴 Высокий риск"
+
+        context.user_data["risk_level"] = risk_level
+
+        if score <= 2:
+            await query.edit_message_text(
+                f"{risk_level}\n\n❌ К сожалению, мы не можем подтвердить аренду."
+            )
+            return ConversationHandler.END
+
+        await query.edit_message_text(
+            f"{risk_level}\n\nПереходим к выбору скутера."
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("Honda PCX2", callback_data="pcx2")],
+            [InlineKeyboardButton("Honda Lead", callback_data="lead")],
+        ]
+
+        await query.message.reply_text(
+            "🛵 Выберите скутер:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        return SCOOTER
+
+    await ask_risk_question(update, context)
+    return RISK
 
 
 # ---------- SCOOTER ----------
@@ -114,7 +216,8 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 {context.user_data['name']}\n"
         f"🏨 {context.user_data['hotel']}\n"
         f"🚪 {context.user_data['room']}\n"
-        f"📞 {context.user_data['contact']}"
+        f"📞 {context.user_data['contact']}\n\n"
+        f"📊 {context.user_data['risk_level']}"
     )
 
     keyboard = [[InlineKeyboardButton("✅ Подтвердить", callback_data="confirm")]]
@@ -147,13 +250,15 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "hotel": context.user_data["hotel"],
         "room": context.user_data["room"],
         "contact": context.user_data["contact"],
+        "risk_score": context.user_data["risk_score"],
+        "risk_level": context.user_data["risk_level"],
         "status": "new"
     }
 
     await redis_client.set(f"booking:{booking_id}", json.dumps(booking_data))
 
     await query.edit_message_text(
-        "⏳ Заявка отправлена. Ожидайте подтверждения."
+        "⏳ Заявка отправлена менеджеру. Ожидайте подтверждения."
     )
 
     return ConversationHandler.END
@@ -167,6 +272,7 @@ def main():
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            RISK: [CallbackQueryHandler(handle_risk, pattern="^risk_")],
             SCOOTER: [CallbackQueryHandler(scooter_selected)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, days_input)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
