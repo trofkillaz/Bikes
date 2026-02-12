@@ -26,7 +26,7 @@ REDIS_URL = os.getenv("REDIS_URL")
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-(SCOOTER, DAYS, NAME, CONTACT, CONFIRM) = range(5)
+(SCOOTER, DAYS, NAME, HOTEL, ROOM, CONTACT, CONFIRM) = range(7)
 
 SCOOTERS = {
     "pcx2": {"name": "Honda PCX2", "price": 300000},
@@ -56,7 +56,6 @@ async def scooter_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     context.user_data["scooter"] = query.data
-
     await query.edit_message_text("Введите количество дней аренды:")
     return DAYS
 
@@ -65,12 +64,11 @@ async def scooter_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        days = int(update.message.text)
+        context.user_data["days"] = int(update.message.text)
     except:
         await update.message.reply_text("Введите число.")
         return DAYS
 
-    context.user_data["days"] = days
     await update.message.reply_text("Введите ваше имя:")
     return NAME
 
@@ -79,6 +77,22 @@ async def days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
+    await update.message.reply_text("Введите название отеля:")
+    return HOTEL
+
+
+# ---------- HOTEL ----------
+
+async def get_hotel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["hotel"] = update.message.text
+    await update.message.reply_text("Введите номер комнаты:")
+    return ROOM
+
+
+# ---------- ROOM ----------
+
+async def get_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["room"] = update.message.text
     await update.message.reply_text("Введите контакт (WhatsApp / Telegram):")
     return CONTACT
 
@@ -90,7 +104,6 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     scooter = SCOOTERS[context.user_data["scooter"]]
     total = scooter["price"] * context.user_data["days"]
-
     context.user_data["total"] = total
 
     text = (
@@ -99,12 +112,12 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📆 {context.user_data['days']} дней\n"
         f"💰 {total} VND\n\n"
         f"👤 {context.user_data['name']}\n"
+        f"🏨 {context.user_data['hotel']}\n"
+        f"🚪 {context.user_data['room']}\n"
         f"📞 {context.user_data['contact']}"
     )
 
-    keyboard = [[
-        InlineKeyboardButton("✅ Подтвердить", callback_data="confirm")
-    ]]
+    keyboard = [[InlineKeyboardButton("✅ Подтвердить", callback_data="confirm")]]
 
     await update.message.reply_text(
         text,
@@ -126,21 +139,21 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     booking_data = {
         "booking_id": booking_id,
         "client_id": update.effective_user.id,
+        "username": update.effective_user.username,
         "scooter": scooter["name"],
         "days": context.user_data["days"],
         "total": context.user_data["total"],
         "name": context.user_data["name"],
+        "hotel": context.user_data["hotel"],
+        "room": context.user_data["room"],
         "contact": context.user_data["contact"],
         "status": "new"
     }
 
-    await redis_client.set(
-        f"booking:{booking_id}",
-        json.dumps(booking_data)
-    )
+    await redis_client.set(f"booking:{booking_id}", json.dumps(booking_data))
 
     await query.edit_message_text(
-        "⏳ Заявка отправлена менеджеру. Ожидайте подтверждения."
+        "⏳ Заявка отправлена. Ожидайте подтверждения."
     )
 
     return ConversationHandler.END
@@ -157,6 +170,8 @@ def main():
             SCOOTER: [CallbackQueryHandler(scooter_selected)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, days_input)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            HOTEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_hotel)],
+            ROOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_room)],
             CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
             CONFIRM: [CallbackQueryHandler(confirm, pattern="^confirm$")],
         },
