@@ -274,39 +274,29 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    chat_id = update.effective_chat.id
+    scooter = SCOOTERS[context.user_data["scooter"]]["name"]
 
+    text = (
+        f"🆕 НОВАЯ ЗАЯВКА\n\n"
+        f"🛵 Скутер: {scooter}\n"
+        f"📆 Дней: {context.user_data['days']}\n"
+        f"💵 Цена/день: {context.user_data['price_per_day']} VND\n"
+        f"💰 Итого: {context.user_data['total']} VND\n\n"
+        f"👤 Имя: {context.user_data['name']}\n"
+        f"📍 Контакт:\n{context.user_data['contact']}\n\n"
+        f"{context.user_data['risk_status']}\n\n"
+        f"🆔 Telegram ID клиента: {update.effective_user.id}"
+    )
+
+    # Сообщение клиенту
     await query.edit_message_text(
         "⏳ Ожидайте подтверждения бронирования."
     )
 
-    print("CHAT ID:", chat_id)
-
-    return ConversationHandler.END
-
-
-# ---------------- MAIN ----------------
-
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            SCOOTER: [CallbackQueryHandler(scooter_selected)],
-            TARIFF: [CallbackQueryHandler(tariff_selected)],
-            DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, days_input)],
-            TEST: [CallbackQueryHandler(test_answer)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
-            CONFIRM: [CallbackQueryHandler(confirm)]
-        },
-        fallbacks=[]
+    # Отправка в группу
+    await context.bot.send_message(
+        chat_id=GROUP_ID,
+        text=text
     )
 
-    app.add_handler(conv)
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+    return ConversationHandler.END
