@@ -16,7 +16,7 @@ from telegram.ext import (
 
 TOKEN = "8162365118:AAGmm-PMJXuo1G3VGHXeT5nk0xPNcpKjcVU"
 
-# 🔥 ВСТАВЬ ID ГРУППЫ
+# ВСТАВЬ СВОЙ ID ГРУППЫ
 GROUP_ID = -1003726782924
 
 logging.basicConfig(level=logging.INFO)
@@ -263,7 +263,6 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{context.user_data['risk_status']}"
     )
 
-    # 🔥 Отправка в группу
     await context.bot.send_message(
         chat_id=GROUP_ID,
         text=group_text,
@@ -284,13 +283,27 @@ def main():
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            SCOOTER: [CallbackQueryHandler(scooter_selected)],
-            TARIFF: [CallbackQueryHandler(tariff_selected)],
-            DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, days_input)],
-            TEST: [CallbackQueryHandler(test_answer)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
-            CONFIRM: [CallbackQueryHandler(confirm)],
+            SCOOTER: [
+                CallbackQueryHandler(scooter_selected, pattern="^(pcx2|lead)$")
+            ],
+            TARIFF: [
+                CallbackQueryHandler(tariff_selected, pattern="^(2|6|13|14\+)$")
+            ],
+            DAYS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, days_input)
+            ],
+            TEST: [
+                CallbackQueryHandler(test_answer, pattern="^(yes|no)$")
+            ],
+            NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)
+            ],
+            CONTACT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)
+            ],
+            CONFIRM: [
+                CallbackQueryHandler(confirm, pattern="^confirm$")
+            ],
         },
         fallbacks=[],
     )
