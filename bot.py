@@ -62,6 +62,38 @@ RISK_QUESTIONS = [
 ]
 
 
+# ================= ПРОВЕРКА CONFIRMED =================
+
+async def check_confirmed_bookings(context: ContextTypes.DEFAULT_TYPE):
+    keys = await redis_client.keys("booking:*")
+
+    for key in keys:
+        raw = await redis_client.get(key)
+        if not raw:
+            continue
+
+        data = json.loads(raw)
+
+        if data.get("status") == "confirmed":
+
+            final_text = data.get("final_text")
+
+            if not final_text:
+                continue
+
+            try:
+                await context.bot.send_message(
+                    chat_id=int(data["client_id"]),
+                    text=final_text
+                )
+
+                data["status"] = "closed"
+                await redis_client.set(key, json.dumps(data))
+
+            except Exception as e:
+                logging.error(f"Ошибка отправки клиенту: {e}")
+
+
 # ---------- START ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,8 +102,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ask_risk_question(update, context)
     return RISK
 
-
-# ---------- ASK QUESTION ----------
 
 async def ask_risk_question(update, context):
     step = context.user_data["risk_step"]
@@ -94,8 +124,6 @@ async def ask_risk_question(update, context):
         )
 
 
-# ---------- HANDLE RISK ----------
-
 async def handle_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -111,7 +139,6 @@ async def handle_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["risk_step"] += 1
 
-    # Если вопросы закончились
     if context.user_data["risk_step"] >= len(RISK_QUESTIONS):
 
         score = context.user_data["risk_score"]
@@ -151,8 +178,6 @@ async def handle_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return RISK
 
 
-# ---------- SCOOTER ----------
-
 async def scooter_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -161,8 +186,6 @@ async def scooter_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("Введите количество дней аренды:")
     return DAYS
 
-
-# ---------- DAYS ----------
 
 async def days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -175,15 +198,11 @@ async def days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return NAME
 
 
-# ---------- NAME ----------
-
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
     await update.message.reply_text("Введите название отеля:")
     return HOTEL
 
-
-# ---------- HOTEL ----------
 
 async def get_hotel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["hotel"] = update.message.text
@@ -191,15 +210,11 @@ async def get_hotel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ROOM
 
 
-# ---------- ROOM ----------
-
 async def get_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["room"] = update.message.text
     await update.message.reply_text("Введите контакт (WhatsApp / Telegram):")
     return CONTACT
 
-
-# ---------- CONTACT ----------
 
 async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["contact"] = update.message.text
@@ -230,8 +245,6 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CONFIRM
 
 
-# ---------- CONFIRM ----------
-
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -258,35 +271,3 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await redis_client.set(f"booking:{booking_id}", json.dumps(booking_data))
 
     await query.edit_message_text(
-        "⏳ Заявка отправлена менеджеру. Ожидайте подтверждения."
-    )
-
-    return ConversationHandler.END
-
-
-# ---------- MAIN ----------
-
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            RISK: [CallbackQueryHandler(handle_risk, pattern="^risk_")],
-            SCOOTER: [CallbackQueryHandler(scooter_selected)],
-            DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, days_input)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            HOTEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_hotel)],
-            ROOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_room)],
-            CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
-            CONFIRM: [CallbackQueryHandler(confirm, pattern="^confirm$")],
-        },
-        fallbacks=[],
-    )
-
-    app.add_handler(conv)
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
