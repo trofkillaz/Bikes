@@ -61,6 +61,7 @@ RISK_QUESTIONS = [
 # ---------------- START ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     context.user_data["risk_score"] = 0
     context.user_data["risk_step"] = 0
     await ask_risk_question(update, context)
@@ -228,7 +229,8 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await redis_booking.set(
         f"booking:{booking_id}",
-        json.dumps(booking_data)
+        json.dumps(booking_data),
+        ex=60 * 60 * 24
     )
 
     await query.edit_message_text(
@@ -242,9 +244,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def listen_events(app):
     while True:
         try:
-            keys = await redis_event.keys("event:*")
-
-            for key in keys:
+            async for key in redis_event.scan_iter("event:*"):
                 raw = await redis_event.get(key)
                 if not raw:
                     continue
