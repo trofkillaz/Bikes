@@ -1,302 +1,139 @@
 import logging
 from telegram import (
     Update,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineKeyboardButton,
 )
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
+    ConversationHandler,
 )
 
-from telegram.ext import ConversationHandler
+# ======================
+# НАСТРОЙКИ
+# ======================
 
 TOKEN = "8162365118:AAHdvqm3ewNTee8Q5izkS4s1XBh8vTO7oRk"
+GROUP_ID = -1003726782924  # <-- ВСТАВЬ СВОЙ ID ГРУППЫ
 
+# ======================
+# ЛОГИ
+# ======================
 
-# Состояния
-(
-    SCOOTER,
-    TARIFF,
-    DAYS,
-    TEST,
-    NAME,
-    CONTACT,
-    CONFIRM
-) = range(7)
+logging.basicConfig(level=logging.INFO)
 
-# База скутеров
-SCOOTERS = {
-    "pcx2": {
-        "name": "Honda PCX2",
-        "prices": {
-            "2": 340000,
-            "6": 300000,
-            "13": 260000,
-            "14+": 230000
-        }
-    },
-    "lead": {
-        "name": "Honda Lead",
-        "prices": {
-            "2": 240000,
-            "6": 210000,
-            "13": 190000,
-            "14+": 170000
-        }
-    }
-}
+# ======================
+# СОСТОЯНИЯ
+# ======================
 
-# Скоринг таблица
-SCORING = [
-    ("Права категории A?", 2, -1),
-    ("Международные права?", 1, 0),
-    ("Стаж более 2 лет?", 2, 0),
-    ("ДТП за последние 2 года?", -2, 2),
-    ("Срок аренды более 15 дней?", -1, 1),
-    ("Совместное пользование?", 0, 1),
-    ("Выезд за пределы провинции?", 0, 1),
-    ("В стране более 7 дней?", 1, 0),
-    ("Возраст старше 23 лет?", 1, 0),
-    ("Ранее арендовал во Вьетнаме?", 2, 1),
-]
+NAME, PHONE, DATE, CONFIRM = range(4)
 
-# ---------------- START ----------------
+# ======================
+# ХЕНДЛЕРЫ
+# ======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Honda PCX2", callback_data="pcx2")],
-        [InlineKeyboardButton("Honda Lead", callback_data="lead")]
-    ]
-    await update.message.reply_text(
-        "🛵 Выберите скутер:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return SCOOTER
-
-
-# ---------------- SCOOTER ----------------
-
-async def scooter_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    scooter_key = query.data
-    context.user_data["scooter"] = scooter_key
-
-    prices = SCOOTERS[scooter_key]["prices"]
-
-    keyboard = [
-        [InlineKeyboardButton("До 2 дней", callback_data="2")],
-        [InlineKeyboardButton("До 6 дней", callback_data="6")],
-        [InlineKeyboardButton("До 13 дней", callback_data="13")],
-        [InlineKeyboardButton("14+ дней", callback_data="14+")]
-    ]
-
-    await query.edit_message_text(
-        "📆 Выберите тариф:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    return TARIFF
-
-
-# ---------------- TARIFF ----------------
-
-async def tariff_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    context.user_data["tariff"] = query.data
-
-    await query.edit_message_text("Введите количество дней (максимум 20):")
-    return DAYS
-
-
-# ---------------- DAYS ----------------
-
-async def days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        days = int(update.message.text)
-    except:
-        await update.message.reply_text("Введите число.")
-        return DAYS
-
-    if days > 20:
-        await update.message.reply_text("❌ Максимальный срок аренды 20 дней.")
-        return DAYS
-
-    context.user_data["days"] = days
-
-    scooter = SCOOTERS[context.user_data["scooter"]]
-    tariff = context.user_data["tariff"]
-    price_per_day = scooter["prices"][tariff]
-
-    total = price_per_day * days
-
-    context.user_data["price_per_day"] = price_per_day
-    context.user_data["total"] = total
-
-    context.user_data["score"] = 0
-    context.user_data["question_index"] = 0
-
-    return await ask_question(update, context)
-
-
-# ---------------- TEST ----------------
-
-async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    index = context.user_data["question_index"]
-
-    if index >= len(SCORING):
-        return await finish_test(update, context)
-
-    question = SCORING[index][0]
-
-    keyboard = [
-        [
-            InlineKeyboardButton("Да", callback_data="yes"),
-            InlineKeyboardButton("Нет", callback_data="no")
-        ]
-    ]
-
-    await update.message.reply_text(
-        f"❓ {question}",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    return TEST
-
-
-async def test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    index = context.user_data["question_index"]
-    yes_score = SCORING[index][1]
-    no_score = SCORING[index][2]
-
-    if query.data == "yes":
-        context.user_data["score"] += yes_score
-    else:
-        context.user_data["score"] += no_score
-
-    context.user_data["question_index"] += 1
-
-    if context.user_data["question_index"] >= len(SCORING):
-        return await finish_test_callback(query, context)
-
-    question = SCORING[context.user_data["question_index"]][0]
-
-    keyboard = [
-        [
-            InlineKeyboardButton("Да", callback_data="yes"),
-            InlineKeyboardButton("Нет", callback_data="no")
-        ]
-    ]
-
-    await query.edit_message_text(
-        f"❓ {question}",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    return TEST
-
-
-async def finish_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pass
-
-
-async def finish_test_callback(query, context):
-    score = context.user_data["score"]
-
-    if score <= 2:
-        await query.edit_message_text("🔴 Высокий риск. В бронировании отказано.")
-        return ConversationHandler.END
-
-    status = "🟢 Низкий риск" if score >= 8 else "🟡 Средний риск"
-    context.user_data["risk_status"] = status
-
-    await query.edit_message_text(
-        f"{status}\n\nВведите ваше имя:"
-    )
-
+    await update.message.reply_text("Введите ваше имя:")
     return NAME
 
 
-# ---------------- NAME ----------------
-
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
-    await update.message.reply_text(
-        "Пожалуйста, отправьте одним сообщением:\n\nWhatsApp или Telegram\nНазвание отеля\nНомер комнаты"
-    )
-    return CONTACT
+    await update.message.reply_text("Введите номер телефона:")
+    return PHONE
 
 
-# ---------------- CONTACT ----------------
+async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["phone"] = update.message.text
+    await update.message.reply_text("Введите дату бронирования:")
+    return DATE
 
-async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["contact"] = update.message.text
 
-    scooter = SCOOTERS[context.user_data["scooter"]]["name"]
+async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["date"] = update.message.text
 
     text = (
-        f"📄 Проверьте данные:\n\n"
-        f"🛵 Скутер: {scooter}\n"
-        f"📆 Дней: {context.user_data['days']}\n"
-        f"💵 Цена/день: {context.user_data['price_per_day']} VND\n"
-        f"💰 Итого: {context.user_data['total']} VND\n\n"
+        "Проверьте данные:\n\n"
         f"👤 Имя: {context.user_data['name']}\n"
-        f"📍 Контакт:\n{context.user_data['contact']}\n\n"
-        f"{context.user_data['risk_status']}"
+        f"📞 Телефон: {context.user_data['phone']}\n"
+        f"📅 Дата: {context.user_data['date']}\n\n"
+        "Подтвердить?"
     )
 
     keyboard = [
-        [InlineKeyboardButton("✅ Подтвердить бронирование", callback_data="confirm")]
+        [InlineKeyboardButton("✅ Подтвердить", callback_data="confirm")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel")],
     ]
 
     await update.message.reply_text(
         text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
     return CONFIRM
 
 
-# ---------------- CONFIRM ----------------
-
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    scooter = SCOOTERS[context.user_data["scooter"]]["name"]
+    if query.data == "confirm":
 
-    text = (
-        f"🆕 НОВАЯ ЗАЯВКА\n\n"
-        f"🛵 Скутер: {scooter}\n"
-        f"📆 Дней: {context.user_data['days']}\n"
-        f"💵 Цена/день: {context.user_data['price_per_day']} VND\n"
-        f"💰 Итого: {context.user_data['total']} VND\n\n"
-        f"👤 Имя: {context.user_data['name']}\n"
-        f"📍 Контакт:\n{context.user_data['contact']}\n\n"
-        f"{context.user_data['risk_status']}\n\n"
-        f"🆔 Telegram ID клиента: {update.effective_user.id}"
-    )
+        text = (
+            "🆕 НОВАЯ ЗАЯВКА\n\n"
+            f"👤 Имя: {context.user_data['name']}\n"
+            f"📞 Телефон: {context.user_data['phone']}\n"
+            f"📅 Дата: {context.user_data['date']}"
+        )
 
-    # Сообщение клиенту
-    await query.edit_message_text(
-        "⏳ Ожидайте подтверждения бронирования."
-    )
+        # Отправка в группу
+        await context.bot.send_message(
+            chat_id=GROUP_ID,
+            text=text,
+        )
 
-    # Отправка в группу
-    await context.bot.send_message(
-        chat_id=GROUP_ID,
-        text=text
-    )
+        await query.edit_message_text("✅ Заявка отправлена!")
+
+    else:
+        await query.edit_message_text("❌ Заявка отменена.")
 
     return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Отменено.")
+    return ConversationHandler.END
+
+
+# ======================
+# MAIN
+# ======================
+
+def main():
+    print("CLIENT BOT STARTED")
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
+            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
+            CONFIRM: [CallbackQueryHandler(confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(conv_handler)
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
