@@ -271,3 +271,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await redis_client.set(f"booking:{booking_id}", json.dumps(booking_data))
 
     await query.edit_message_text(
+        "⏳ Заявка отправлена менеджеру. Ожидайте подтверждения."
+    )
+
+    return ConversationHandler.END
