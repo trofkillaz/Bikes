@@ -227,10 +227,23 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "status": "new"
     }
 
+    # Сохраняем booking
     await redis_booking.set(
         f"booking:{booking_id}",
         json.dumps(booking_data),
         ex=60 * 60 * 24
+    )
+
+    # 🔥 ВАЖНО — отправляем событие менеджеру
+    event_data = {
+        "type": "new_booking",
+        "booking_id": booking_id
+    }
+
+    await redis_event.set(
+        f"event:{uuid.uuid4()}",
+        json.dumps(event_data),
+        ex=300
     )
 
     await query.edit_message_text(
@@ -238,7 +251,6 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     return ConversationHandler.END
-
 # ---------------- LISTENER ----------------
 
 async def listen_events(app):
