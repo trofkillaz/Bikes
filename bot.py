@@ -2,28 +2,32 @@ import os
 import json
 import uuid
 import logging
-import asyncio
 import redis.asyncio as redis
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ConversationHandler,
     ContextTypes,
     filters,
-    ConversationHandler,
 )
 
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-REDIS_1 = os.getenv("REDIS_1")
-REDIS_2 = os.getenv("REDIS_2")
+REDIS_URL = os.getenv("REDIS_URL")
+GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID"))
 
-redis_booking = redis.from_url(REDIS_1, decode_responses=True)
-redis_event = redis.from_url(REDIS_2, decode_responses=True)
+r = redis.from_url(REDIS_URL, decode_responses=True)
+
+# ================== СОСТОЯНИЯ ==================
 
 (
     RISK,
@@ -33,42 +37,92 @@ redis_event = redis.from_url(REDIS_2, decode_responses=True)
     HOTEL,
     ROOM,
     CONTACT,
-    CONFIRM
+    DEPOSIT_INPUT,
 ) = range(8)
 
-# ---------------- СКУТЕРЫ ----------------
+# ================== СКУТЕРЫ ==================
 
 SCOOTERS = {
     "pcx2": {"name": "Honda PCX2", "price": 300000},
     "lead": {"name": "Honda Lead", "price": 200000},
 }
 
-# ---------------- START ----------------
+# ================== РИСК ==================
+
+RISK_QUESTIONS = [
+    ("Права категории A?", 2, -1),
+    ("Международные права?", 1, 0),
+    ("Стаж более 2 лет?", 2, 0),
+    ("Были ДТП за последние 2 года?", -2, 2),
+    ("Возраст старше 23 лет?", 1, 0),
+]
+
+# =========================================================
+#                      КЛИЕНТ
+# =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text("🛵 Добро пожаловать! Выберите скутер:")
+    context.user_data["risk_score"] = 0
+    context.user_data["risk_step"] = 0
+    return await ask_risk(update, context)
 
-    keyboard = [
-        [InlineKeyboardButton("Honda PCX2", callback_data="pcx2")],
-        [InlineKeyboardButton("Honda Lead", callback_data="lead")],
-    ]
+async def ask_risk(update, context):
+    step = context.user_data["risk_step"]
+    q = RISK_QUESTIONS[step][0]
+
+    kb = [[
+        InlineKeyboardButton("✅ Да", callback_data="risk_yes"),
+        InlineKeyboardButton("❌ Нет", callback_data="risk_no"),
+    ]]
 
     await update.message.reply_text(
-        "Выберите модель:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"📊 Оценка риска\n\n{q}",
+        reply_markup=InlineKeyboardMarkup(kb)
     )
+    return RISK
 
-    return SCOOTER
+async def handle_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-# ---------------- SCOOTER ----------------
+    step = context.user_data["risk_step"]
+    yes_score = RISK_QUESTIONS[step][1]
+    no_score = RISK_QUESTIONS[step][2]
+
+    if query.data == "risk_yes":
+        context.user_data["risk_score"] += yes_score
+    else:
+        context.user_data["risk_score"] += no_score
+
+    context.user_data["risk_step"] += 1
+
+    if context.user_data["risk_step"] >= len(RISK_QUESTIONS):
+
+        if context.user_data["risk_score"] <= 1:
+            await query.edit_message_text("❌ Высокий риск. Аренда невозможна.")
+            return ConversationHandler.END
+
+        keyboard = [
+            [InlineKeyboardButton("Honda PCX2", callback_data="pcx2")],
+            [InlineKeyboardButton("Honda Lead", callback_data="lead")],
+        ]
+
+        await query.edit_message_text("🛵 Выберите скутер:")
+        await query.message.reply_text(
+            "Выберите модель:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return SCOOTER
+
+    return await ask_risk(query, context)
 
 async def scooter_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     context.user_data["scooter"] = query.data
-    await query.edit_message_text("Введите количество дней аренды:")
+    await query.edit_message_text("Введите количество дней:")
     return DAYS
 
 async def days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,12 +132,12 @@ async def days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введите число.")
         return DAYS
 
-    await update.message.reply_text("Введите ваше имя:")
+    await update.message.reply_text("Введите имя:")
     return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
-    await update.message.reply_text("Введите название отеля:")
+    await update.message.reply_text("Введите отель:")
     return HOTEL
 
 async def get_hotel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -104,109 +158,139 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     booking_id = str(uuid.uuid4())
 
-    booking_data = {
+    booking = {
         "booking_id": booking_id,
         "client_id": update.effective_user.id,
         "username": update.effective_user.username,
         "scooter": scooter["name"],
         "days": context.user_data["days"],
         "total": total,
-        "deposit": "—",
+        "deposit": "",
         "equipment": [],
         "name": context.user_data["name"],
         "hotel": context.user_data["hotel"],
         "room": context.user_data["room"],
         "contact": context.user_data["contact"],
-        "status": "new"
+        "status": "new",
     }
 
-    await redis_booking.set(
-        f"booking:{booking_id}",
-        json.dumps(booking_data),
-        ex=600
+    await r.set(f"booking:{booking_id}", json.dumps(booking))
+
+    text = (
+        f"🆕 Новая заявка\n\n"
+        f"🛵 {booking['scooter']}\n"
+        f"📆 {booking['days']} дней\n"
+        f"💵 {booking['total']} VND\n\n"
+        f"👤 {booking['name']}\n"
+        f"🏨 {booking['hotel']} | {booking['room']}\n"
+        f"📞 {booking['contact']}"
     )
 
-    await redis_event.set(
-        f"event:{uuid.uuid4()}",
-        json.dumps({
-            "type": "new_booking",
-            "booking_id": booking_id
-        }),
-        ex=600
+    kb = [[
+        InlineKeyboardButton("✅ Принять", callback_data=f"accept:{booking_id}")
+    ]]
+
+    await context.bot.send_message(
+        chat_id=GROUP_CHAT_ID,
+        text=text,
+        reply_markup=InlineKeyboardMarkup(kb)
     )
 
-    await update.message.reply_text(
-        "⏳ Заявка отправлена менеджеру. Ожидайте подтверждения."
-    )
-
+    await update.message.reply_text("⏳ Заявка отправлена менеджеру.")
     return ConversationHandler.END
 
-# ==============================
-# LISTENER (полностью исправлен)
-# ==============================
+# =========================================================
+#                    МЕНЕДЖЕР
+# =========================================================
 
-async def listen_events(app):
-    print("Client listener started")
+async def manager_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    while True:
-        try:
-            keys = []
-            async for key in redis_event.scan_iter("event:update:*"):
-                keys.append(key)
+    action, booking_id = query.data.split(":")
+    raw = await r.get(f"booking:{booking_id}")
+    if not raw:
+        return
 
-            for key in keys:
-                raw = await redis_event.get(key)
-                if not raw:
-                    continue
+    booking = json.loads(raw)
 
-                event = json.loads(raw)
+    # --- Принятие ---
+    if action == "accept":
+        booking["status"] = "in_progress"
+        booking["manager"] = update.effective_user.username
 
-                if event.get("type") != "booking_update":
-                    continue
+        kb = [[
+            InlineKeyboardButton("2 шлема", callback_data=f"helmets:{booking_id}"),
+            InlineKeyboardButton("2 дождевика", callback_data=f"rain:{booking_id}")
+        ]]
 
-                booking_id = event["booking_id"]
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(kb))
+        await r.set(f"booking:{booking_id}", json.dumps(booking))
+        return
 
-                raw_booking = await redis_booking.get(f"booking:{booking_id}")
-                if not raw_booking:
-                    await redis_event.delete(key)
-                    continue
+    # --- Комплектация ---
+    if action == "helmets":
+        booking["equipment"].append("2 шлема")
 
-                booking = json.loads(raw_booking)
+    if action == "rain":
+        booking["equipment"].append("2 дождевика")
 
-                equipment_text = "\n".join(booking.get("equipment", []))
-                if not equipment_text:
-                    equipment_text = "Без доп. комплектации"
+    if action == "deposit":
+        context.user_data["deposit_booking"] = booking_id
+        await query.message.reply_text("Введите депозит:")
+        return DEPOSIT_INPUT
 
-                text = (
-                    f"✅ Заявка завершена\n\n"
-                    f"🛵 {booking['scooter']}\n"
-                    f"📆 {booking['days']} дней\n"
-                    f"💵 {booking['total']}\n"
-                    f"💰 Депозит: {booking.get('deposit','—')}\n\n"
-                    f"📦 Комплектация:\n{equipment_text}\n\n"
-                    f"👤 {booking['name']}\n"
-                    f"🏨 {booking['hotel']} | {booking['room']}\n"
-                    f"📞 {booking['contact']}"
-                )
+    if action == "finish":
+        equipment = "\n".join(booking["equipment"]) or "Без доп. комплектации"
 
-                await app.bot.send_message(
-                    chat_id=booking["client_id"],
-                    text=text
-                )
+        text = (
+            f"✅ Заявка завершена\n\n"
+            f"🛵 {booking['scooter']}\n"
+            f"📆 {booking['days']} дней\n"
+            f"💵 {booking['total']} VND\n"
+            f"💰 Депозит: {booking['deposit']}\n\n"
+            f"📦 Комплектация:\n{equipment}\n\n"
+            f"👤 {booking['name']}\n"
+            f"🏨 {booking['hotel']} | {booking['room']}\n"
+            f"📞 {booking['contact']}\n\n"
+            f"👨‍💼 @{booking['manager']}"
+        )
 
-                await redis_event.delete(key)
+        booking["status"] = "completed"
+        await r.set(f"booking:{booking_id}", json.dumps(booking))
 
-        except Exception as e:
-            logging.error(f"Client listener error: {e}")
+        await query.edit_message_text(text)
 
-        await asyncio.sleep(2)
+        await context.bot.send_message(
+            chat_id=booking["client_id"],
+            text=text
+        )
+        return ConversationHandler.END
 
-# ==============================
-# MAIN
-# ==============================
+    kb = [[
+        InlineKeyboardButton("Ввести депозит", callback_data=f"deposit:{booking_id}"),
+        InlineKeyboardButton("Завершить", callback_data=f"finish:{booking_id}")
+    ]]
 
-async def post_init(app):
-    asyncio.create_task(listen_events(app))
+    await query.edit_message_reply_markup(InlineKeyboardMarkup(kb))
+    await r.set(f"booking:{booking_id}", json.dumps(booking))
+
+async def deposit_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    booking_id = context.user_data.get("deposit_booking")
+    raw = await r.get(f"booking:{booking_id}")
+    if not raw:
+        return ConversationHandler.END
+
+    booking = json.loads(raw)
+    booking["deposit"] = update.message.text  # любой текст разрешён
+
+    await r.set(f"booking:{booking_id}", json.dumps(booking))
+    await update.message.reply_text("Депозит сохранён. Нажмите Завершить в группе.")
+    return ConversationHandler.END
+
+# =========================================================
+#                        MAIN
+# =========================================================
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -214,6 +298,7 @@ def main():
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            RISK: [CallbackQueryHandler(handle_risk, pattern="^risk_")],
             SCOOTER: [CallbackQueryHandler(scooter_selected)],
             DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, days_input)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
@@ -225,9 +310,9 @@ def main():
     )
 
     app.add_handler(conv)
-    app.post_init = post_init
+    app.add_handler(CallbackQueryHandler(manager_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, deposit_input))
 
-    print("Client bot started")
     app.run_polling()
 
 if __name__ == "__main__":
