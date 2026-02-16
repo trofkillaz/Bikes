@@ -1,2 +1,4 @@
-python-telegram-bot[job-queue]==20.7
-redis[asyncio]
+aiogram==3.4.1
+python-dotenv==1.0.1
+gspread==6.0.0
+oauth2client==4.1.3
